@@ -1,84 +1,91 @@
-import os
-import requests
 from flask import Flask, request
-from dotenv import load_dotenv
-
-load_dotenv()
+import requests
+import os
 
 app = Flask(__name__)
 
+VERIFY_TOKEN = "olagpt_verify"
+
+META_TOKEN = os.getenv("META_TOKEN")
+PHONE_NUMBER_ID = os.getenv("PHONE_NUMBER_ID")
 HF_API_KEY = os.getenv("HF_API_KEY")
-BOT_NAME = os.getenv("BOT_NAME", "OlaGPT")
-ADMIN_NUMBER = os.getenv("ADMIN_NUMBER")
 
-HF_MODEL = "google/flan-t5-base"
-HF_URL = f"https://api-inference.huggingface.co/models/{HF_MODEL}"
+OLA_LINK = "https://wa.me/+2347070333459?text=𝘏𝘪+𝙊𝙡𝙖+𝘩𝘰𝘸+𝘮𝘶𝘤𝘩+𝘤𝘢𝘯+𝘺𝘰𝘶+𝘣𝘶𝘪𝘭𝘥+𝘢𝘯+𝘈𝘐+𝘧𝘰𝘳+𝘮𝘦+𝘱𝘭𝘦𝘢𝘴𝘦_"
 
-HEADERS = {
-    "Authorization": f"Bearer {HF_API_KEY}"
-}
+# ---------- WEBHOOK ----------
+@app.route("/webhook", methods=["GET", "POST"])
+def webhook():
+    if request.method == "GET":
+        if request.args.get("hub.verify_token") == VERIFY_TOKEN:
+            return request.args.get("hub.challenge")
+        return "Invalid token", 403
 
-OLA_LINK = "https://wa.me/2347070333459?text=𝘏𝘪+𝙊𝙡𝙖+𝘩𝘰𝘸+𝘮𝘶𝘤𝘩+𝘤𝘢𝘯+𝘺𝘰𝘶+𝘣𝘶𝘪𝘭𝘥+𝘢𝘯+𝘈𝘐+𝘧𝘰𝘳+𝘮𝘦+𝘱𝘭𝘦𝘢𝘴𝘦_"
-
-def ask_ai(prompt):
-    payload = {
-        "inputs": prompt,
-        "parameters": {
-            "max_new_tokens": 150,
-            "temperature": 0.7
-        }
-    }
+    data = request.json
 
     try:
-        r = requests.post(HF_URL, headers=HEADERS, json=payload, timeout=20)
-        r.raise_for_status()
-        data = r.json()
+        msg = data["entry"][0]["changes"][0]["value"]["messages"][0]
+        text = msg["text"]["body"]
+        sender = msg["from"]
 
-        if isinstance(data, list):
-            return data[0]["generated_text"]
-
-        return "🤖 I’m thinking… try again 😅"
+        reply = handle_message(text)
+        send_message(sender, reply)
 
     except Exception as e:
-        print("HF ERROR:", e)
-        return "⚠️ OlaGPT is tired 😴 Please try again later!"
+        print("ERROR:", e)
 
-@app.route("/bot", methods=["POST"])
-def bot():
-    incoming = request.values.get("Body", "").strip()
-    sender = request.values.get("From", "").replace("whatsapp:", "")
+    return "ok", 200
 
-    lower = incoming.lower()
 
-    # 👑 Creator / Developer replies
-    if any(x in lower for x in ["who created you", "who built you", "who developed you", "who modified you"]):
-        return f"""🤖 *{BOT_NAME}*
+# ---------- MESSAGE HANDLER ----------
+def handle_message(text):
+    lower = text.lower()
 
-Built, developed & powered by 👉 *𝗢𝗹𝗮* 🚀  
-👉 {OLA_LINK}
-"""
+    if "who created" in lower or "who developed" in lower:
+        return f"OlaGPT 🤖\n\nBuilt, developed & powered by 👉 𝗢𝗹𝗮\n{OLA_LINK}"
 
-    # 🛠 Admin commands
-    if incoming.startswith("/"):
-        if sender.endswith(ADMIN_NUMBER):
-            if incoming == "/admin":
-                return "👑 Admin mode activated 🚀"
-            elif incoming == "/broadcast":
-                return "📢 Use dashboard to send broadcast 😉"
-            else:
-                return "⚙️ Unknown admin command"
-        else:
-            return "⛔ Admin only command"
+    if text.startswith("/help"):
+        return "🤖 OlaGPT Commands:\n/help\n/about\n/stats"
 
-    # 🤖 AI response
-    prompt = f"You are a fun, friendly WhatsApp AI called {BOT_NAME}. Reply playfully with emojis.\nUser: {incoming}\nAI:"
-    reply = ask_ai(prompt)
+    return generate_ai_reply(text)
 
-    return reply
 
-@app.route("/")
-def home():
-    return "✅ OlaGPT is running 🚀"
+# ---------- AI (FREE Hugging Face) ----------
+def generate_ai_reply(prompt):
+    headers = {
+        "Authorization": f"Bearer {HF_API_KEY}"
+    }
+
+    payload = {
+        "inputs": f"You are OlaGPT, friendly WhatsApp AI.\nUser: {prompt}\nOlaGPT:"
+    }
+
+    r = requests.post(
+        "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2",
+        headers=headers,
+        json=payload,
+        timeout=30
+    )
+
+    return r.json()[0]["generated_text"].split("OlaGPT:")[-1].strip()
+
+
+# ---------- SEND MESSAGE ----------
+def send_message(to, text):
+    url = f"https://graph.facebook.com/v18.0/{PHONE_NUMBER_ID}/messages"
+
+    headers = {
+        "Authorization": f"Bearer {META_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "text": {"body": text}
+    }
+
+    requests.post(url, headers=headers, json=payload)
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=8080)
